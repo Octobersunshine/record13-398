@@ -33,6 +33,26 @@ def calculate_optimal_bins(data):
     return bins
 
 
+def detect_outliers(data):
+    q1 = np.percentile(data, 25)
+    q3 = np.percentile(data, 75)
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    data = np.asarray(data)
+    outlier_mask = (data < lower_bound) | (data > upper_bound)
+    outliers = data[outlier_mask].tolist()
+    return {
+        'count': int(np.sum(outlier_mask)),
+        'lower_bound': float(lower_bound),
+        'upper_bound': float(upper_bound),
+        'q1': float(q1),
+        'q3': float(q3),
+        'values': outliers[:20],
+        'more_count': int(max(0, len(outliers) - 20))
+    }
+
+
 def fig_to_base64(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight', dpi=100)
@@ -56,15 +76,55 @@ def generate_histogram(data, column, bins='auto'):
 
 
 def generate_boxplot(data, column):
+    col_data = data[column].dropna().values
+    outlier_info = detect_outliers(col_data)
+
     fig, ax = plt.subplots(figsize=(8, 5))
-    bp = ax.boxplot(data[column].dropna(), patch_artist=True, vert=True)
+
+    flierprops = dict(
+        marker='D',
+        markerfacecolor='#FF5722',
+        markeredgecolor='#D32F2F',
+        markersize=6,
+        markeredgewidth=1,
+        alpha=0.8
+    )
+
+    bp = ax.boxplot(
+        col_data,
+        patch_artist=True,
+        vert=True,
+        flierprops=flierprops,
+        whis=1.5
+    )
+
     for patch in bp['boxes']:
         patch.set_facecolor('#4C8BF5')
         patch.set_alpha(0.8)
     for median in bp['medians']:
         median.set_color('#FF5722')
         median.set_linewidth(2)
-    ax.set_title(f'Box Plot of {column}', fontsize=14, fontweight='bold')
+    for whisker in bp['whiskers']:
+        whisker.set_color('#1976D2')
+        whisker.set_linewidth(1.5)
+    for cap in bp['caps']:
+        cap.set_color('#1976D2')
+        cap.set_linewidth(1.5)
+
+    if outlier_info['count'] > 0:
+        lower = outlier_info['lower_bound']
+        upper = outlier_info['upper_bound']
+        ax.axhline(y=lower, color='#FFC107', linestyle='--', linewidth=1, alpha=0.6,
+                   label=f'Lower bound: {lower:.2f}')
+        ax.axhline(y=upper, color='#FFC107', linestyle='--', linewidth=1, alpha=0.6,
+                   label=f'Upper bound: {upper:.2f}')
+
+        title = f'Box Plot of {column}\n({outlier_info["count"]} outliers detected)'
+        ax.legend(loc='upper right', fontsize=8, framealpha=0.8)
+    else:
+        title = f'Box Plot of {column}\n(No outliers detected)'
+
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_ylabel(column, fontsize=12)
     ax.grid(axis='y', alpha=0.3)
     return fig
@@ -134,6 +194,8 @@ def visualize():
         else:
             actual_bins = bins
 
+        outliers = detect_outliers(col_data)
+
         hist_fig = generate_histogram(data, col, bins=actual_bins)
         box_fig = generate_boxplot(data, col)
 
@@ -156,6 +218,7 @@ def visualize():
             'column': col,
             'bins': actual_bins,
             'statistics': stats,
+            'outliers': outliers,
             'histogram': hist_base64,
             'boxplot': box_base64
         })
