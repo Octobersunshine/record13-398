@@ -9,6 +9,29 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+MIN_BINS = 5
+MAX_BINS = 50
+
+
+def calculate_optimal_bins(data):
+    n = len(data)
+    if n < 2:
+        return 1
+    iqr = np.subtract(*np.percentile(data, [75, 25]))
+    if iqr == 0:
+        std = np.std(data)
+        if std == 0:
+            return min(MAX_BINS, max(MIN_BINS, int(np.sqrt(n))))
+        bin_width = 3.49 * std * (n ** (-1/3))
+    else:
+        bin_width = 2 * iqr * (n ** (-1/3))
+    data_range = np.max(data) - np.min(data)
+    if data_range == 0 or bin_width == 0:
+        return MIN_BINS
+    bins = int(np.ceil(data_range / bin_width))
+    bins = max(MIN_BINS, min(MAX_BINS, bins))
+    return bins
+
 
 def fig_to_base64(fig):
     buf = io.BytesIO()
@@ -19,9 +42,12 @@ def fig_to_base64(fig):
     return img_base64
 
 
-def generate_histogram(data, column, bins=10):
+def generate_histogram(data, column, bins='auto'):
+    col_data = data[column].dropna().values
+    if bins == 'auto' or bins is None:
+        bins = calculate_optimal_bins(col_data)
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(data[column].dropna(), bins=bins, edgecolor='black', color='#4C8BF5', alpha=0.8)
+    ax.hist(col_data, bins=bins, edgecolor='black', color='#4C8BF5', alpha=0.8)
     ax.set_title(f'Histogram of {column}', fontsize=14, fontweight='bold')
     ax.set_xlabel(column, fontsize=12)
     ax.set_ylabel('Frequency', fontsize=12)
@@ -90,30 +116,45 @@ def visualize():
         if not columns:
             return jsonify({'error': 'Specified columns not found or not numeric'}), 400
 
-    bins = request.args.get('bins', type=int) or request.form.get('bins', type=int) or 10
+    bins_param = request.args.get('bins') or request.form.get('bins')
+    if bins_param is not None:
+        try:
+            bins = int(bins_param)
+        except (ValueError, TypeError):
+            bins = 'auto'
+    else:
+        bins = 'auto'
 
     results = []
     for col in columns:
-        hist_fig = generate_histogram(data, col, bins=bins)
+        col_data = data[col].dropna().values
+
+        if bins == 'auto' or bins is None:
+            actual_bins = calculate_optimal_bins(col_data)
+        else:
+            actual_bins = bins
+
+        hist_fig = generate_histogram(data, col, bins=actual_bins)
         box_fig = generate_boxplot(data, col)
 
         hist_base64 = fig_to_base64(hist_fig)
         box_base64 = fig_to_base64(box_fig)
 
-        col_data = data[col].dropna()
+        col_data_series = data[col].dropna()
         stats = {
-            'count': int(col_data.count()),
-            'mean': float(col_data.mean()),
-            'std': float(col_data.std()),
-            'min': float(col_data.min()),
-            '25%': float(col_data.quantile(0.25)),
-            '50%': float(col_data.median()),
-            '75%': float(col_data.quantile(0.75)),
-            'max': float(col_data.max())
+            'count': int(col_data_series.count()),
+            'mean': float(col_data_series.mean()),
+            'std': float(col_data_series.std()),
+            'min': float(col_data_series.min()),
+            '25%': float(col_data_series.quantile(0.25)),
+            '50%': float(col_data_series.median()),
+            '75%': float(col_data_series.quantile(0.75)),
+            'max': float(col_data_series.max())
         }
 
         results.append({
             'column': col,
+            'bins': actual_bins,
             'statistics': stats,
             'histogram': hist_base64,
             'boxplot': box_base64
